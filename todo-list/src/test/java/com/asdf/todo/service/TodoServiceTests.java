@@ -1,86 +1,103 @@
 package com.asdf.todo.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.BDDMockito.given;
-import static org.mockito.Mockito.verify;
 
+import com.asdf.todo.dto.TodoRequestDto;
+import com.asdf.todo.dto.TodoResponseDto;
 import com.asdf.todo.entity.Todo;
 import com.asdf.todo.repository.TodoRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.testcontainers.containers.MySQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 
-import java.util.Arrays;
 import java.util.List;
 
-@ExtendWith(MockitoExtension.class)
+@SpringBootTest
+@Testcontainers
 class TodoServiceTests {
 
-    @Mock
-    private TodoRepository todoRepository;
+    @Container
+    static MySQLContainer<?> mySQLContainer = new MySQLContainer<>("mysql:8.0.32")
+            .withDatabaseName("todo_test_db")
+            .withUsername("testuser")
+            .withPassword("testpass");
 
-    @InjectMocks
-    private TodoService todoService;
+    @DynamicPropertySource
+    static void configureProperties(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", mySQLContainer::getJdbcUrl);
+        registry.add("spring.datasource.username", mySQLContainer::getUsername);
+        registry.add("spring.datasource.password", mySQLContainer::getPassword);
+        registry.add("spring.jpa.hibernate.ddl-auto", () -> "create-drop");
+    }
+
+    @Autowired private TodoService todoService;
+    @Autowired private TodoRepository todoRepository;
+
+    @BeforeEach
+    void setUp() {
+        // 각 테스트 실행 전에 DB를 깨끗하게 비웁니다.
+        todoRepository.deleteAll();
+    }
 
     @Test
-    @DisplayName("전체 조회를 하면 레포지토리가 반환하는 목록을 그대로 반환한다")
-    void findAll_Success() {
-        List<Todo> mockList = Arrays.asList(new Todo(), new Todo());
-        given(todoRepository.findAll()).willReturn(mockList);
+    @DisplayName("할 일을 저장하면 DB에 기록되고 ID가 포함된 DTO를 반환한다")
+    void save_Success() {
+        TodoRequestDto request = new TodoRequestDto("Save Test", "Content");
 
-        List<Todo> result = todoService.findAll();
+        TodoResponseDto result = todoService.save(request);
+
+        assertThat(result.getId()).isNotNull();
+        assertThat(result.getTitle()).isEqualTo("Save Test");
+    }
+
+    @Test
+    @DisplayName("전체 조회를 하면 DB에 저장된 모든 목록을 DTO로 반환한다")
+    void findAll_Success() {
+        todoRepository.save(new Todo(null, "Task 1", "Desc 1", false, null));
+        todoRepository.save(new Todo(null, "Task 2", "Desc 2", true, null));
+
+        List<TodoResponseDto> result = todoService.findAll();
 
         assertThat(result).hasSize(2);
-        verify(todoRepository).findAll();
     }
 
     @Test
-    @DisplayName("ID로 조회하면 해당 데이터를 반환한다")
+    @DisplayName("ID로 조회 시 실제 DB의 데이터를 정확히 찾아 DTO로 변환한다")
     void findById_Success() {
-        Todo todo = new Todo(1L, "Title", "Desc", false);
-        given(todoRepository.findById(1L)).willReturn(todo);
+        Todo saved = todoRepository.save(new Todo(null, "Find Me", "Desc", false, null));
 
-        Todo result = todoService.findById(1L);
+        TodoResponseDto result = todoService.findById(saved.getId());
 
-        assertThat(result.getTitle()).isEqualTo("Title");
-        verify(todoRepository).findById(1L);
+        assertThat(result).isNotNull();
+        assertThat(result.getTitle()).isEqualTo("Find Me");
     }
 
     @Test
-    @DisplayName("할 일을 저장하면 ID가 부여된 객체를 반환한다")
-    void save_Success() {
-        Todo todo = new Todo(null, "Task", "Desc", false);
-        given(todoRepository.save(any(Todo.class)))
-                .willReturn(new Todo(1L, "Task", "Desc", false));
-
-        Todo result = todoService.save(todo);
-
-        assertThat(result.getId()).isEqualTo(1L);
-        verify(todoRepository).save(todo);
-    }
-
-    @Test
-    @DisplayName("수정 시 전달받은 ID로 셋팅하여 저장한다")
+    @DisplayName("수정 시 DB의 기존 데이터를 변경하고 업데이트된 정보를 반환한다")
     void update_Success() {
-        Long id = 1L;
-        Todo updateData = new Todo(null, "New Title", "New Desc", true);
-        given(todoRepository.save(any(Todo.class))).willReturn(updateData);
+        Todo saved = todoRepository.save(new Todo(null, "Old Title", "Old Desc", false, null));
+        TodoRequestDto updateRequest = new TodoRequestDto("New Title", "New Desc", true);
 
-        todoService.update(id, updateData);
+        TodoResponseDto result = todoService.update(saved.getId(), updateRequest);
 
-        assertThat(updateData.getId()).isEqualTo(id);
-        verify(todoRepository).save(updateData);
+        assertThat(result.getTitle()).isEqualTo("New Title");
+        assertThat(result.isCompleted()).isTrue();
     }
 
     @Test
-    @DisplayName("삭제 요청 시 레포지토리의 deleteById를 호출한다")
+    @DisplayName("삭제 시 DB에서 해당 레코드가 제거된다")
     void delete_Success() {
-        todoService.delete(1L);
+        Todo saved = todoRepository.save(new Todo(null, "To be deleted", "Desc", false, null));
 
-        verify(todoRepository).deleteById(1L);
+        todoService.delete(saved.getId());
+
+        assertThat(todoRepository.findById(saved.getId())).isEmpty();
     }
 }
