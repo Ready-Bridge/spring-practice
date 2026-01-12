@@ -131,7 +131,7 @@ class TodoControllerTests {
         mockMvc.perform(delete("/api/todos/v2/1")) // v2 반영
                 .andExpect(status().isNotFound());
 
-        verify(todoService).findById(1L);
-        verify(verify(todoService, never())).delete(anyLong());
+        verify(todoService).findById(1L); // 조회가 일어났는지 확인
+        verify(todoService, never()).delete(anyLong()); // 삭제는 절대 호출되지 않았는지 확인
     }
 }
